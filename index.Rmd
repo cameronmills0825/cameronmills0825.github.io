@@ -7,14 +7,193 @@ pagetitle: whatever
 knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE)
 
 library(tidyverse)
+library(janitor)
+library(modelr)
+library(readxl)
+library(gganimate)
+library(easystats)
+library(GGally)
+library(skimr)
+```
+
+Here's my website! 
+
+
+# Welcome!!
+
+#### This website contains my final project for Data Analysis For Biologists
+
+When trying to come up with an idea for this project, I was thinking about questions I had in my own life.
+   <li>I am currently studying Biotechnology, and am interested in applying to pharmacy school after I obtain my undergraduate degree.</li>
+   <li>I think pharmacy is exactly what I would enjoy doing, but do I want to put myself in thousands of dollars of student debt? Do I want to add **FOUR MORE** years of school on top of what I already have? Would it be all worth it?</li>
+
+```{r fig.align='center', fig.width=150, fig.height=75}
+knitr::include_graphics("./media/graduates1.jpg")
+
+```
+First, we're going to look at data directly from the [BLS](https://www.bls.gov/) (The U.S. Bureau of Labor Statistics)
+
+Here's a glimps: 
+```{r}
+theme_set(theme_minimal())
+path <- "C:/Users/email/cameronmills0825.github.io/final_project/Data/Salaries_Among_Students_Based_On_Demographics.xlsx"
+# get header names
+education_names <-
+  read_xlsx(path,range = "D4:AB6",col_names = FALSE) %>% 
+  c() %>% 
+  unlist() %>% 
+  unique() %>% 
+  str_remove_all("\\r") %>% 
+  str_replace_all("\\n"," ") %>% 
+  str_remove("\\\\1\\\\")
+education_names <- c("Year","Total_nocollege",education_names[!is.na(education_names)])
+# remove reduntant merged header
+education_names <-
+  education_names[education_names != "Bachelor's or higher degree"]
+
+read_special <-
+  function(file,sheetrange){
+    x <- 
+      read_xlsx(file,range = sheetrange,col_names = FALSE) %>% 
+      select(all_of(c(1,2,4,6,9,12,15,17,20,23,25,27))) %>% 
+      apply(2,as.numeric) %>% 
+      as.data.frame()
+    colnames(x) <- education_names
+    return(x)
+  }
+male_realdollars <-
+  read_special(path,"A10:AB32") %>% # sheet range for this first data area
+  mutate(sex="Male",DataType="2020_Dollars")
+female_realdollars <-
+  read_special(path,"A34:AB56") %>% # sheet range for this second data area
+  mutate(sex="Female",DataType="2020_Dollars")
+real_dollars <- full_join(male_realdollars,female_realdollars)
+real_dollars <-
+  real_dollars %>%
+  pivot_longer(!c("Year","sex","DataType"),names_to = "Education",values_to = "Median Income (2020 dollars)") %>% 
+  filter(Education != "Total",
+         Education != "Total_nocollege") 
+real_dollars <-
+  real_dollars %>%   
+  mutate(Education = factor(Education, levels = real_dollars$Education %>% unique))
+
+head(real_dollars)
+```
+
+Package *skimr*
+
+```{r}
+skim <- skim(real_dollars)
+skim
+```
+
+
+
+
+
+This data is showing the median income of individuals, depending on gender, the year, and education level. 
+
+I was first interested in seeing how the income changed over the years for each gender based on education level: 
+```{r}
+real_dollars %>%
+  ggplot(aes(x=Education,y=`Median Income (2020 dollars)`,fill=sex,group=sex)) +
+  geom_col(position = 'dodge') +
+  theme(axis.text.x = element_text(angle=90,hjust = 1,vjust = .5)) +
+  transition_states(Year)
+```
+Here is it evident that the income increases among men and women as education level progresses, not surprisingly. 
+
+All around, the income also increases as the years progress. This can be due to inflation, as well increases in demand for jobs within that specific education level. 
+
+This data takes into account full-time workers, as well as part-time workers. 
+
+More data from the BLS shows us how many full time workers there are for each education level: 
+
+```{r}
+df <- read_xlsx("./final_project/Data/Full_Time_Worker_Data.xlsx")
+
+df$`Percent of full time workers` <- as.numeric(as.character(df$`Percent of full time workers`))
+df$Year <- as.numeric(as.character(df$Year))
+df$`Full time workers` <- as.numeric(as.character(df$`Full time workers`))
+df$Education <- as.factor(as.character(df$Education))
+
+df %>% 
+  mutate(Education = fct_relevel(Education, "Less than 9th Grade", "Some High School", "High School", 
+                            "Some College", "Associates", "Bachelor's", "Master's", "Professional", "Doctor's")) %>% 
+  ggplot(aes(x=Education, y=`Percent of full time workers`, fill=Gender, group=Gender)) + 
+  geom_col(position = 'dodge') + 
+  facet_wrap(~Gender) + 
+  theme(axis.text.x = element_text(angle = 90)) + 
+  transition_states(Year)
+```
+
+### So what does this all mean??
+
+Let's take a look at some models to better show the relationship between the variables in the *real_dollars* dataset: 
+
+```{r}
+names(real_dollars)
+mod1 <- glm(data = real_dollars, 
+            formula = real_dollars$`Median Income (2020 dollars)` ~ real_dollars$Year * real_dollars$Education)
+
+mod2 <- glm(data = real_dollars, 
+            formula = real_dollars$`Median Income (2020 dollars)` ~ real_dollars$Education + real_dollars$Year)
+
+mod3 <- glm(data = real_dollars, 
+            formula = real_dollars$`Median Income (2020 dollars)` ~ Education * Year * sex)
+
+mod4 <- glm(data = real_dollars, 
+            formula = real_dollars$`Median Income (2020 dollars)` ~ Year * Education)
+
+step <- MASS::stepAIC(mod4, trace = 0)
+mod5 <- glm(data = real_dollars, 
+            formula = step$formula)
+
+comps <- compare_performance(mod1, mod2, mod3, mod4, mod5, rank = TRUE)
+comps %>% plot()
+```
+Here we can see that model 3 is essentially perfect compared to the other models. 
+
+Here's how the perform compared to each other on a graph: 
+```{r}
+real_dollars %>% 
+  gather_predictions(mod1, mod2, mod3, mod4, mod5) %>% 
+  ggplot(aes(x=`Median Income (2020 dollars)`, y=pred, color=model)) + 
+  geom_segment(aes(x=0, y=0, xend=200000, yend=200000), linetype=2, color="black", alpha=.5) + 
+  geom_smooth(method = "lm", se = FALSE)
+```
+
+Model 3 is right on the line, while the other models are deviating slightly from it, showing the accuracy of model 3. 
+
+### How will this apply to me in the future? 
+
+As we have seen, generally the income increases with more education one receives. But how will the salaries of today change 20 years from now, when my kids are thinking about expanding their education? 
+
+I will predict the salaries of people who obtain Master's degrees in the year 2040 for both men and women. I will use model 3 since that seems to be the most accurate.
+
+```{r, include=TRUE}
+new_data_m <- data.frame(Education="Master's degree", 
+                       Year=2040, sex="Male")
+predict(mod3, new_data_m)
+
+
+new_data_f <- data.frame(Education="Master's degree", 
+                       Year=2040, sex="Female")
+predict(mod3, new_data_f)
 
 ```
 
-Here's my website. 
 
-```{r fig.align='center', fig.width=7, fig.height=5}
-knitr::include_graphics("./media/city.jpg")
+As with any project, it's important to note the variables left out that could affect the outcome of my findings. 
 
-```
+<li> Related field (Sales, Business, Science, Education, etc.) </li>
+<li> Past work experience </li>
+
+Even though these points were left out, I still received some understanding of how education level affects salaries among individuals, with respect to gender and the specified year. I can also see now where incomes are headed in the future.
+
+Even though the increased salary is a benefit, one still needs to think, is extra schooling worth it to THEM? 
+
+
+
 
 
